@@ -1,0 +1,813 @@
+#!/bin/bash
+
+# Script to run most PEST related optimizations in parallel with SLURM or PBS.
+# Uses 'beopest_startmanager.sh', 'beopest_startagent.sh', and 'bp_runner'
+# scripts.
+
+# INSTALLATION
+# ============
+# These scripts expects that PEST plus zero or more of PEST_HP, and PEST++
+# suites of optimizers are installed into a PATH directory.
+#
+# Copy the four scripts in this distribution into a PATH directory and make
+# executable using
+#
+#     cp qpest beopest_startmanager.sh beopest_startagent.sh bp_runner installation/PATH/directory/
+#     cd installation/PATH/directory/
+#     chmod a+x qpest beopest_startmanager.sh beopest_startagent.sh bp_runner
+#
+# Note that the PEST_HP names use "_" as the separator between parts of the
+# names.  This is consistent with names in the PEST_HP suite.
+# If you have the PEST_HP suite installed:
+#
+#     ln -s qpest qpest_cmaes_hp
+#     ln -s qpest qpest_hp
+#     ln -s qpest qrsi_hp
+#
+# Note that the PEST++ names use "-" as the separator between parts of the
+# names.  This is consistent with names in the PEST++ suite.
+# If you have the PEST++ suite installed:
+#
+#     ln -s qpest qpestpp-glm
+#     ln -s qpest qpestpp-da
+#     ln -s qpest qpestpp-ies
+#     ln -s qpest qpestpp-mou
+#     ln -s qpest qpestpp-opt
+#     ln -s qpest qpestpp-sen
+#     ln -s qpest qpestpp-sqp
+#     ln -s qpest qpestpp-swp
+#
+# The `qpest` script uses these link names to set appropriate commands and
+# options.
+#
+# HELP
+# ====
+# Help is available by running a blank command.  You can also use the "--help"
+# option for any of the commands.
+#
+# RUNNING
+# =======
+# The parallel PEST versions are run simply by passing the PEST *.pst file to
+# the command, for example: 'qpest_cmaes_hp model_opt.pst'
+#
+# CONFIGURATION
+# =============
+# This process requires three partitions (on SLURM) or queues (on PBS).  One
+# for the manager that should be limited the maximum number of PEST jobs you
+# want to run at the same time.  One for the agents and one for the model runs.
+#
+#     PEST_MANAGER_QUEUE -> on any node, but should be limited to only a few
+#                          slots to limit the number of simultaneous PEST runs.
+#     PEST_AGENTS_QUEUE -> run on compute nodes limit to less or equal to
+#                          number of processor cores.
+#     PEST_RUNNERS_QUEUE -> run on compute nodes match number of 'pest_agents'
+#                           on the node.
+#
+# The agent jobs in 'PEST_AGENTS_QUEUE' use hardly any resources and just
+# manage model runs submitted to the 'PEST_RUNNERS_QUEUE' for the
+# 'PEST_MANAGER_QUEUE' job.  There has to be the exact same number of
+# 'PEST_AGENTS_QUEUE' and 'PEST_RUNNERS_QUEUE' slots on each node.  When
+# a model is running in 'PEST_RUNNERS_QUEUE' it will use an entire processor.
+# These scripts expect to run serial jobs in parallel each with different
+# parameters.
+#
+# Set `PLATFORM` below to either "slurm" or "pbs".
+#
+# Set the 'max_agents' to the maximum number of agents per PEST optimization
+# run to allow on the cluster.  The `qpest` script may set an optimum value
+# less than this depending on the job.
+
+# =============================================================================
+#   START OF CONFIGURATION
+# =============================================================================
+
+PLATFORM="slurm"
+
+max_agents=150
+
+PEST_MANAGER_QUEUE=pest.master
+PEST_AGENTS_QUEUE=pest.agents
+PEST_RUNNERS_QUEUE=pest.runners
+
+# For 'qpest_cmaes_hp' also sets the number of agents to this value but
+# doesn't exceed `max_agents`
+cmaes_population_size=70
+
+# =============================================================================
+#   END OF CONFIGURATION
+# =============================================================================
+
+# $0 is the name of the command
+# Need to figure out whether running qpest, qpest_hp, qpestpp-glm, qpestpp-opt,
+# qpest_cmaes_hp, ...etc.
+fname=$(basename "${0}")
+
+# Set the name of the actual program called.
+input_manager_name=${fname:1:${#fname}-1}    # Removes the beginning 'q'.
+
+# Holds all PEST related options given in POSIX standard and translated to /o
+# format required by the PEST suite of programs.
+PEST_OPTIONS=' '
+
+# Docs
+see_also='
+SEE ALSO
+  qpest
+    PEST: local, gradient Gauss-Marquardt-Levenberg method
+  qpest_cmaes_hp
+    PEST_HP: global, CMA-ES (covariance matrix adaptation-evolutionary strategy)
+  qpest_hp
+    PEST_HP: local, gradient Gauss-Marquardt-Levenberg method for "highly
+    parallelized" (hp) models
+  qrsi_hp
+    PEST_HP: RSI_HP performs a task similar to that of PESTPP-IES (White,
+    2018). Iteratively adjust a set of random parameter realizations which are
+    samples of the prior parameter probability distribution, until they
+    constitute samples of the posterior parameter probability distribution.
+  qpestpp-glm
+    PEST++: local, Gauss-Levenburg-Marquardt
+  qpestpp-da
+    PEST++: global, differential evolution
+  qpestpp-ies
+    PEST++: utility, iterative ensemble smoother for production of a suite of
+    calibration-constrained parameter fields
+  qpestpp-mou
+    PEST++: single and multiple constrained optimization under uncertainty
+    using evolutionary heuristics
+  qpestpp-opt
+    PEST++: decision optimization under uncertainty using sequential linear
+    programming and linearised chance constraints
+  qpestpp-sen
+    PEST++: utility, global sensitivity analysis (Morris and Saltelli)
+  qpestpp-sqp
+    PEST++: ensemble-based, constrained, sequential quadratic programming
+  qpestpp-swp
+    PEST++: utility, develops a set of parallelized model runs for any reason'
+
+platform_options_docs='PLATFORM OPTIONS
+  -m
+      Send mail at end of job.
+  -b
+      Block until pest run is complete.
+  -N gridengine
+      Specify job name, defaults to "bp_manager".
+  --hold_jid JOBIDSorNAMES
+      Hold this job in queue until previous JOBIDSorNAMES job is done.'
+pest_i='  -i first.jco
+      Allows reading in "first.jco" for first iteration.'
+pest_t='  -t "My Case Name"
+      Insert the text in output. Double quotes (") are needed if text includes
+      spaces.'
+pest_z="  -z
+      This DOES NOT change the input *.pst file.
+      * Creates a temporary tmp_*.pst file setting number of iterations to 0.
+      * Creates the model input files in the local directory using the current
+        model parameters from the tmp_*.pst file.
+      * Runs the model specified in the tmp_*.pst file with model results
+      * saved to the current directory.
+      * Deletes the tmp_*.pst file, and associated PEST created files."
+pest_run_best_parameters="  -p, --run_best_parameters
+      This DOES NOT change the input *.pst file.
+      * Creates a temporary tmp_*.pst file using the 'parrep' utility.  Uses
+        optimized parameters in the *.par or *.bva file that matches the input
+        *.pst file and setting number of iterations to 0.
+      * Creates the model input files in the local directory using the latest,
+        optimized parameters from tmp_*.pst.
+      * Runs the model specified in the tmp_*.pst file with model results saved
+        to the current directory.
+      * Deletes the tmp_*.pst file, and associated PEST created files."
+pest_r="  -r
+      Restart at beginning of iteration when interrupted."
+pest_j="  -j
+      Restart at the previous inversion process where parameter upgrades were
+      last calculated."
+pest_s="  -s
+      Restart at the model run when interrupted."
+pest_f="  --f_basename 'basename'
+      Run the model based on parameter datasets held in parameter files.  The
+      '--f_basename' specifies the basename of the parameter files that will be
+      run.  If set to 'basename' will use the parameter files 'basename*.par'.
+  --f_start start
+      The starting index of the first parameter file.
+  --f_end end
+      The ending index of the last parameter file.
+
+      Example:
+      ,,, --f_basename case --f_start 3 --f_end 6 ...
+
+      Will run the model 4 time with the parameter files 'case3.par',
+      'case4.par', 'case5.par', and 'case6.par'.  All files must exist.
+
+      'randpar', 'randpar1', and 'lhs2pest' may be useful in the development of
+      the parameter files."
+
+case ${input_manager_name} in
+    pest)
+        # Manager
+        #  beopest pestfile [/r] [/j] [/s] [/d] [/i] [/p1] [/t "text"] [/f] /h           :port
+        # Agent
+        #  beopest pestfile [/r] [/j] [/s] [/d] [/i] [/p1] [/t "text"] [/f] /h managerhost:port
+
+        MANAGERFNAME='beopest'
+        AGENTFNAME=${MANAGERFNAME}
+        MANAGERFLAG=' /h :'
+        AGENTFLAG=' /h '
+
+        equations=false
+        opts='-o hrjsmbpzi:t:N: -l run_best_parameters,help,hold_jid:,p1,f_basename:,f_start:,f_end:'
+        usestr='[-r|-j|-s|-i first.jco|--p1|--f_basename "example" --f_start start --f_end end] [-t "My Case Name"] [-N gridengine_job_name] [--hold_jid JOBIDSorNAMES]'
+        detailuse="PEST Suite: Original Optimizer
+
+  This is a parallel implementation of the standard local, linear gradient
+  optimizer.  This uses the Gauss-Marquardt-Levenberg method.
+
+  This script incorporates BEOPEST parallel processing into a job management
+  system (currently support SLURM and PBS).
+
+  Written in Fortran by John Doherty.
+
+  $fname requires the PEST control file *.pst
+
+  Example:
+      $fname $usestr pest_case.pst
+
+  REQUIRED
+      pest_case.pst   = name of PEST .pst file (no spaces)
+
+OPTIONS
+  -h|--help
+      Display help screen.
+
+PEST OPTIONS
+${pest_r}
+${pest_j}
+${pest_s}
+${pest_i}
+${pest_t}
+${pest_f}
+${pest_z}
+${pest_run_best_parameters}
+
+${platform_options_docs}
+${see_also}
+"
+        ;;
+
+    pest_hp)
+        # Manager
+        #  pest_hp  pestfile [/s] [/i] [/t "text"] [/f] [/hpstart] /h           :port
+        # Agent
+        #  agent_hp pestfile                                           /h managerhost:port
+        MANAGERFNAME='pest_hp'
+
+        AGENTFNAME='agent_hp'
+        MANAGERFLAG=' /h :'
+        AGENTFLAG=' /h '
+
+        equations=true
+        opts='-o hsmbpzi:t:N: -l run_best_parameters,help,hold_jid:,hpstart,f_basename:,f_start:,f_end:'
+        usestr='[-s|-i first.jco|--hpstart|--f_basename "example" --f_start start --f_end end] [-t "My Case Name"] [-N gridengine_job_name] [--hold_jid JOBIDSorNAMES]'
+        detailuse="PEST_HP Suite: Standard Optimizer for Highly Parallelized Computing Environments
+
+  This is a parallel implementation of the standard local, linear gradient
+  optimizer.  This uses the Gauss-Marquardt-Levenberg method.
+
+  'HP' is intended for 'Highly Parallelized' or 'High Performance' computing
+  environments.
+
+  Also directly incorporates equations that would normally have to be
+  implemented by injecting a 'par2par' processing step.
+
+  Written in Fortran by John Doherty.
+
+OPTIONS
+  -h|--help
+      Display help screen.
+
+PEST OPTIONS
+${pest_i}
+${pest_t}
+${pest_f}
+${pest_z}
+${pest_run_best_parameters}
+
+${platform_options_docs}
+${see_also}
+"
+        ;;
+
+    pestpp-da|pestpp-glm|pestpp-ies|pestpp-mou|pestpp-opt|pestpp-sen|pestpp-sqp|pestpp-swp)
+        # Manager
+        #  pestpp-XXX control_file.pst /H         :port
+        # Agent
+        #  pestpp-XXX control_file.pst /H hostname:port
+
+        MANAGERFNAME=${input_manager_name}
+        AGENTFNAME=${MANAGERFNAME}
+        MANAGERFLAG='/H :'
+        AGENTFLAG='/H'
+
+        equations=true
+        opts='-o hmbpzN: -l run_best_parameters,help,hold_jid:'
+        usestr=' [-N gridengine_job_name] [--hold_jid JOBIDSorNAMES]'
+        detailuse="PEST++ Suite
+
+  The intention behind creation of the PEST++ suite was to reproduce much of
+  the functionality of PEST in code that is modular, object oriented and
+  supportive of collaborative programming.
+
+  Written in C++ primarily by J.T. White.
+
+OPTIONS
+  -h|--help
+      Display help screen.
+
+PEST OPTIONS
+${pest_z}
+${pest_run_best_parameters}
+
+${platform_options_docs}
+${see_also}
+"
+        ;;
+
+    pestpp-pso)
+        # Manager
+        #  pestpp-pso control_file.pst             port
+        # Agent
+        #  pestpp-pso control_file.pst /h hostname:port
+
+        MANAGERFNAME=${input_manager_name}
+        AGENTFNAME='pestpp-pso'
+        MANAGERFLAG=' '
+        AGENTFLAG=' /h '
+
+        equations=false
+        opts='-o hmbpzN: -l run_best_parameters,help,hold_jid:'
+        usestr=' [-N gridengine_job_name] [--hold_jid JOBIDSorNAMES]'
+        detailuse="
+
+OPTIONS
+  -h|--help
+      Display help screen.
+
+PEST OPTIONS
+${pest_z}
+${pest_run_best_parameters}
+
+${platform_options_docs}
+${see_also}
+"
+        ;;
+
+    pest_cmaes_hp)
+        # Manager
+        #  cmaes_hp pestfile [/r] /h           :port
+        # Agent
+        #  agent_hp pestfile      /h managerhost:port
+
+        # Get a random number as seed for cmaes
+        rnd=$(shuf -i0-9999 -n1)
+
+        MANAGERFNAME='cmaes_hp'
+        AGENTFNAME='agent_hp'
+        MANAGERFLAG=' /h :'
+        AGENTFLAG=' /h '
+
+        equations=true
+        opts='-o hmbrpzi:N: -l run_best_parameters,help,hold_jid:'
+        usestr='[-r] [-i stdinfile] [-N gridengine_job_name] [--hold_jid JOBIDSorNAMES]'
+        detailuse="PEST_HP Suite: CMAES
+
+  This is a parallel implementation of the CMA-ES (Covariance Matrix
+  Adaptation-Evolutionary Strategy) optimizer.
+
+  'HP' is intended for 'Highly Parallelized' or 'High Performance' computing
+  environments.
+
+  Also directly incorporates equations that would normally have to be
+  implemented by injecting a 'par2par' processing step.
+
+  Written in Fortran by John Doherty.
+
+OPTIONS
+  -h|--help
+      Display help screen.
+
+PEST OPTIONS
+  -i option_file
+      Option file containing answers to the interactive prompts, one per
+      line.
+
+      If not supplied will use the defaults as in the example below.
+
+      ----
+      Enter values for following CMA control variables:-
+
+       Population size, lambda (<Enter> if 21): ${cmaes_population_size}
+       Number of parents, mu (<Enter> if 10): $((cmaes_population_size / 2))
+       Recombination wts - superlin, linear, equal [s/l/e]  (<Enter> if 's'):
+       Random number seed (<Enter> if 1111): ${rnd}
+       Read parameter covariance matrix from a file? [y/n] (<Enter> if 'n'):
+
+       Employ SVD hybridisation?  [y/n]: (<Enter> if 'n'):
+
+       Forgive model run failure? [y/n]: (<Enter> if 'y'):
+
+      Termination Criteria:-
+       Min rel obj fn change over N itns (<Enter> if 1.0000E-03):
+       No of itns (N) over which this applies (<Enter> if 40):
+       Min rel param change over N itns (<Enter> if 1.0000E-03):
+       No of itns (N) over which this applies (<Enter> if 40):
+       Rel high-low generated obj fn diff over N itns (<Enter> if 1.0000E-02):
+       No of itns (N) over which this applies (<Enter> if 10):
+       Maximum number of iterations (<Enter> if 13747945):
+
+       Run model with initial parameters? [y/n]  (<Enter> if 'y'):
+${pest_r}
+${pest_z}
+${pest_run_best_parameters}
+
+${platform_options_docs}
+${see_also}
+"
+        ;;
+
+    rsi_hp)
+        # Manager
+        #  rsi_hp pestfile  /h           :port
+        # Agent
+        #  agent_hp pestfile      /h managerhost:port
+
+        MANAGERFNAME='rsi_hp'
+        AGENTFNAME='agent_hp'
+        MANAGERFLAG=' /h :'
+        AGENTFLAG=' /h '
+
+        equations=true
+        opts='-o hmbpzi:N: -l run_best_parameters,help,hold_jid:'
+        usestr='[-i stdinfile] [-N gridengine_job_name] [--hold_jid JOBIDSorNAMES]'
+        detailuse="
+
+OPTIONS
+  -h|--help
+      Display help screen.
+
+${pest_z}
+${pest_run_best_parameters}
+
+${platform_options_docs}
+${see_also}
+"
+        ;;
+    *)
+        echo "Can't figure out what to do with ${input_manager_name}. Should start with 'qpest'."
+        exit 1
+        ;;
+esac
+
+usage(){
+    pager=${PAGER:-less}
+    if [[ ${PAGER} == "less" ]]; then
+        pager="less -FX"
+    fi
+    if [ $# -eq 1 ]; then
+        errmsg="
+##################################
+$1
+##################################
+"
+    fi
+    echo "
+${errmsg}
+$detailuse
+" | ${pager}
+    exit 1
+}
+
+holdfor=""
+
+# Test given arguments against allowable arguments.
+if ! args=$(getopt ${opts} -- "$@"); then
+    usage
+fi
+eval set -- "${args}"
+
+while true; do
+    case "$1" in
+        -z)
+            new_noptmax_zero_pst=tmp_noptmax_zero_$$.pst
+            shift
+            ;;
+        -p|--run_best_parameters)
+            run_best_parameters_pst=tmp_run_best_parameters_$$.pst
+            shift
+            ;;
+        --hold_jid)  # Hold job in queue until the hold jobid is finished.
+            holdfor="${2}"
+            shift 2
+            ;;
+        -N)
+            jobname="${2}"
+            # If starts with a number prepend a "_".
+            if [[ "${jobname}" =~ ^[0-9] ]];then
+                jobname=_${jobname}
+            fi
+            # Convert all spaces to "_".
+            jobname=${jobname// /_}
+            shift 2
+            ;;
+        -r)
+            PEST_OPTIONS=" ${PEST_OPTIONS} /r "
+            shift
+            ;;
+        -j)
+            PEST_OPTIONS=" ${PEST_OPTIONS} /j "
+            shift
+            ;;
+        -s)
+            PEST_OPTIONS=" ${PEST_OPTIONS} /s "
+            shift
+            ;;
+        -d)
+            echo "The -d option is only for restarting serial jobs which qpest* does not work with."
+            usage
+            ;;
+        -i)
+            INAME=$(mktemp --tmpdir=.)
+            if [ -f "${2}" ]; then
+                printf '%s' "${2}" > "${INAME}"
+            fi
+            export INAME
+
+            PEST_OPTIONS=" ${PEST_OPTIONS} /i "
+            shift 2
+            ;;
+        -I|--ii)
+            INAME=$(mktemp --tmpdir=.)
+            printf '%s' "${2}" > "${INAME}"
+            export INAME
+
+            PEST_OPTIONS=" ${PEST_OPTIONS} /ii "
+            shift 2
+            ;;
+        --f_basename)
+            # The --f_basename, --f_start, and --f_end are assembled into an
+            # input file later on.
+            f_basename="${2}"
+            shift 2
+            ;;
+        --f_start)
+            f_start="${2}"
+            shift 2
+            ;;
+        --f_end)
+            f_end="${2}"
+            shift 2
+            ;;
+        --p1)
+            PEST_OPTIONS=" ${PEST_OPTIONS} /p1 "
+            shift
+            ;;
+        --hpstart)
+            PEST_OPTIONS=" ${PEST_OPTIONS} /hpstart "
+            shift
+            ;;
+        -t)
+            PEST_OPTIONS=" ${PEST_OPTIONS} /t ""${2}"
+            shift 2
+            ;;
+        -m)
+            if [ "${PLATFORM}" == "slurm" ]; then
+                PLATFORM_OPTIONS="${PLATFORM_OPTIONS} --mail-type=ALL "
+            elif [ "${PLATFORM}" == "pbs" ]; then
+                PLATFORM_OPTIONS="${PLATFORM_OPTIONS} -m e "
+            fi
+
+            shift
+            ;;
+        -b)
+            if [ "${PLATFORM}" == "slurm" ]; then
+                PLATFORM_OPTIONS="${PLATFORM_OPTIONS} --wait "
+            elif [ "${PLATFORM}" == "pbs" ]; then
+                PLATFORM_OPTIONS="${PLATFORM_OPTIONS} -Wblock=true "
+            fi
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        --)
+            shift
+            break
+            ;;
+        ?)
+            usage
+            ;;
+    esac
+done
+
+test_case=${1}
+
+# I make the following tests to allow for the pest_case.pst file to be entered
+# without the pst extension.
+# Remove .pst from 'test_case' if it is there.
+test_case=$(basename "${test_case}" .pst)
+
+# Check to make sure .pst file exists
+if [ -r "${test_case}".pst ]; then
+    nname=${test_case}.pst
+else
+    usage "
+    'ERROR'
+    ${test_case}.pst not found.
+    "
+fi
+
+lowcase=$(echo "${nname}" | tr '[:upper:]' '[:lower:]')
+if [ "${nname}" != "${lowcase}" ]; then
+    usage "
+    The '${nname}' must be lower cased. This is required by some PEST
+    programs on Linux because PEST internally makes the file name lower
+    case which works fine on case-insensitive file systems like Windows,
+    but does not work on case sensitive file systems used by Linux.
+"
+fi
+
+if ! grep -q '^ *beopest_runner ' "${nname}"; then
+    usage "
+    Edit ${nname} so that the line following '* model command line'
+    is prefixed with 'beopest_runner '.
+    "
+fi
+
+if [[ ${equations} == false ]]; then
+    if grep -q '^ *[a-zA-Z0-9_][a-zA-Z0-9_]* *= *' "${nname}"; then
+        usage "
+    The '${input_manager_name}' optimizer does not support the parameter
+    equations in '${nname}'.  Instead use a PEST or PEST++ optimizer that does
+    support parameter equations or implement parameter equations using the
+    'par2par' utility.
+    "
+    fi
+fi
+
+# Check to make sure a QPEST job isn't already running in this directory.
+QPEST_RUNNING=qpest_running.log
+export QPEST_RUNNING
+if [ -f qpest_running.log ]; then
+    usage "
+    A 'qpest_running.log' file was found which means that PEST might
+    already be running in this directory.  Verify and if a PEST job
+    is running you can let it finish or force it to stop with the 'pstop'
+    command.  If a PEST job isn't currently running then you can delete
+    the 'qpest_running.log' file and then run a new 'qpest*' job.
+    "
+fi
+echo "${nname}" > qpest_running.log
+
+# This has to be set here instead of the argument processing loop because need
+# the name of the PST file.
+
+# Now that I have processed the arguments need to set num_agents and other
+# settings that need to know the name of the PST file.
+
+if [[ $new_noptmax_zero_pst ]]; then
+    grep -v '^#\|^ *$\|^++' "${nname}" | sed '9s/^ *[0-9][0-9]* / 0 /' > "${new_noptmax_zero_pst}"
+    nname=${new_noptmax_zero_pst}
+    export RUN_PWD=true
+    export DELETE_TMP_PST=${new_noptmax_zero_pst}
+elif [[ $run_best_parameters_pst ]]; then
+    if grep -q '\* svd assist' "${nname}"; then
+        parfile=${test_case}.bpa
+    else
+        parfile=${test_case}.par
+    fi
+    parrep "${parfile}" "${nname}" "${run_best_parameters_pst}" 0
+    nname=${run_best_parameters_pst}
+    export RUN_PWD=true
+    export DELETE_TMP_PST=${run_best_parameters_pst}
+fi
+
+if [ "$(grep -v '^#\|^ *$\|^++' "${nname}" | awk 'NR==9 {print $1; exit}')" -eq "0" ];then
+    optimum_num_agents=1
+else
+    optimum_num_agents=$(awk '/^\* parameter data/, NF < 3' "${nname}" | awk '$2 == "log" || $2 == "none" {print $2}' | wc -l)
+    optimum_num_agents=$((2*optimum_num_agents + 4))
+fi
+
+if [ ${optimum_num_agents} -gt ${max_agents} ]; then
+    optimum_num_agents=${max_agents}
+fi
+
+case ${MANAGERFNAME} in
+    cmaes_hp)
+        # Cant run cmaes with regularization.
+        if grep -q '\* regularisation' "${nname}"; then
+            usage "
+    CMAES HP cannot work with a pest control file that includes regularization.
+    Use a different PEST or PEST++ optimizer or use
+
+    'subreg1 ${nname} newname.pst'
+
+    to remove regularization.
+    "
+        fi
+
+        if [ ${cmaes_population_size} -gt ${max_agents} ]; then
+            cmaes_population_size=${max_agents}
+        fi
+
+        # Make this match cmaes_hp population size in `qpest`
+        num_agents=${cmaes_population_size}
+
+        if [[ -z "${INAME}" ]]; then
+            INAME=$(mktemp --tmpdir=.)
+            parents=$((num_agents / 2))
+            printf "%s\n%s\n\n\n\n\n\n\n\n\n\n\n\n\n\n" "${num_agents}" "${parents}" > "${INAME}"
+            export INAME
+        fi
+        ;;
+    pestpp-glm)
+        num_agents=${optimum_num_agents}
+
+        # Differential Evolution check with pestpp-glm - only need 40 agents.
+        detest=$(grep -c '^++global_opt(de)' "${nname}")
+        if [ "${detest}" -gt "0" ]; then
+            num_agents=40
+        fi
+        if [ "${num_agents}" -gt "${optimum_num_agents}" ]; then
+            num_agents=${optimum_num_agents}
+        fi
+        ;;
+    pest|pest_hp|pestpp-da|pestpp-ies|pestpp-mou|pestpp-opt|pestpp-sen|pestpp-sqp|pestpp-swp)
+        num_agents=${optimum_num_agents}
+        ;;
+esac
+
+# Have to do this outside of the argument processing loop because need to make
+# sure f_basename, f_start, and f_end are all set.
+if [ -n "${f_basename}" ] && [ -n "${F_START}" ] && [ -n "${F_END}" ]; then
+    INAME=$(mktemp --tmpdir=.)
+    printf "%s\n%s\n%s\n%s\n" "${num_agents}" "${f_basename}" "${f_start}" "${f_end}" > "${INAME}"
+    export INAME
+    PEST_OPTIONS=" ${PEST_OPTIONS} /f "
+fi
+
+export PLATFORM
+
+export PEST_AGENTS_QUEUE
+export PEST_RUNNERS_QUEUE
+
+export PEST_OPTIONS
+export MANAGERFNAME
+export MANAGERFLAG
+export AGENTFNAME
+export AGENTFLAG
+export BEOPEST_NUMAGENTS=${num_agents}
+
+rm -f "$(basename "${nname}" .pst)".rec
+rm -f "$(basename "${nname}" .pst)".rmr
+
+# Remove the PEST stop file.
+rm -f "$(basename "${nname}" .pst)".stp
+
+# jobname set to default if hasn't been set
+: "${jobname:=bp_manager}"
+
+# Filename to contain standard output
+outfilename=out.${jobname}.1.txt
+if [ -f "${outfilename}" ]; then
+    mv -f "${outfilename}" "$(basename "${outfilename}" .1.txt)".2.txt
+fi
+
+# Filename to contain standard error
+errorfilename=error.${jobname}.1.txt
+if [ -f "${errorfilename}" ]; then
+    mv -f "${errorfilename}" "$(basename "${errorfilename}" .1.txt)".2.txt
+fi
+
+if [ "${PLATFORM}" == "slurm" ]; then
+    if [ -n "${holdfor}" ]; then
+        addem=$(squeue --noheader --format %i --name "${holdfor}" | tr "[:space:]" ":")
+        addem=${addem%%:}
+        PLATFORM_OPTIONS=" ${PLATFORM_OPTIONS} --dependency=afterok:${addem} "
+    fi
+    PLATFORM_OPTIONS=" ${PLATFORM_OPTIONS} --job-name=${jobname} "
+    PLATFORM_OPTIONS=" ${PLATFORM_OPTIONS} --partition=${PEST_MANAGER_QUEUE} "
+    PLATFORM_OPTIONS=" ${PLATFORM_OPTIONS} --output=${outfilename} "
+    PLATFORM_OPTIONS=" ${PLATFORM_OPTIONS} --error=${errorfilename} "
+    PLATFORM_OPTIONS=" ${PLATFORM_OPTIONS} --oversubscribe "
+    cmd="sbatch ${PLATFORM_OPTIONS} beopest_startmanager.sh ${nname}"
+elif [ "${PLATFORM}" == "pbs" ]; then
+    if [ -n "${holdfor}" ]; then
+        PLATFORM_OPTIONS=" ${PLATFORM_OPTIONS} -W depend=afterok:${holdfor} "
+    fi
+    PLATFORM_OPTIONS=" ${PLATFORM_OPTIONS} -N ${jobname} "
+    PLATFORM_OPTIONS=" ${PLATFORM_OPTIONS} -q ${PEST_MANAGER_QUEUE} "
+    PLATFORM_OPTIONS=" ${PLATFORM_OPTIONS} -o ${outfilename} "
+    PLATFORM_OPTIONS=" ${PLATFORM_OPTIONS} -e ${errorfilename} "
+    cmd="qsub ${PLATFORM_OPTIONS} beopest_startmanager.sh ${nname}"
+fi
+
+${cmd}

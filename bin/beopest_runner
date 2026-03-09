@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# OBSERVATION RE-REFERENCING
+# Observation re-referencing is a PEST technique to run different models for
+# different parts of the optimization process.  For observation re-referencing
+# a user will have three composite model scripts, two prefixed by 'd_' and 'r_'
+# and one without a prefix.  Look in PEST manual for details.
+
+# In order for beopest_runner to support observation re-referencing, there is
+# a base 'beopest_runner' script, and 'd_beopest_runner' and 'r_beopest_runner'
+# links to the base script.
+
+# +--------------------------------------------+-----------------------------+
+# | What PEST Does With 'beopest_runner...'    | What 'beopest_runner' Does  |
+# +--------------------------------------------+-----------------------------+
+# | beopest_runner composite_model_script.sh   | composite_model_script.sh   |
+# +--------------------------------------------+-----------------------------+
+# | r_beopest_runner composite_model_script.sh | r_composite_model_script.sh |
+# +--------------------------------------------+-----------------------------+
+# | d_beopest_runner composite_model_script.sh | d_composite_model_script.sh |
+# +--------------------------------------------+-----------------------------+
+
+
+# Detect whether 'beopest_runner', 'd_beopest_runner', or 'r_beopest_runner'
+# was run by the PEST agent and put '', 'd_', or 'r_' accordingly into the
+# ${firsttwo} variable.
+fname=$(basename "${0}")
+firsttwo=''
+testdigits=${fname:0:2}
+case ${testdigits} in
+    r_|d_)
+        firsttwo=${testdigits}
+        ;;
+esac
+
+# Have to run the composite model script on the same node as the PEST agent
+# that is controlling the model run.
+node=$(hostname)
+node=${node%.cluster}
+
+partition=${PEST_RUNNERS_QUEUE}
+if [ "head" = "$(hostname)" ]; then
+    partition="prunners"
+fi
+
+# Default to slurm
+PLATFORM=${PLATFORM:-slurm}
+
+# Prepend ${firsttwo} to the composite model script and all remaining arguments
+# when submitted to the queue.
+if [ "${PLATFORM}" == "slurm" ]; then
+    cmd="\
+        sbatch                       \
+        --nodelist=${node}           \
+        --job-name bp_runner         \
+        --partition=${partition}     \
+        --error /dev/null            \
+        --output /dev/null           \
+        --wait                       \
+        --ntasks=1                   \
+        --ntasks-per-core=1          \
+        --nodes=1                    \
+        --oversubscribe              \
+        serial_job.sh ${firsttwo}$*  \
+        "
+elif [ "${PLATFORM}" == "pbs" ]; then
+    cmd="\
+        qsub                         \
+        -l nodes=${node}:ppn=1       \
+        -N bp_runner                 \
+        -q ${partition}              \
+        -e /dev/null                 \
+        -o /dev/null                 \
+        -Wblock=true                 \
+        serial_job.sh ${firsttwo}$*  \
+        "
+fi
+
+${cmd}
