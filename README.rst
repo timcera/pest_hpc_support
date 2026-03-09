@@ -221,12 +221,12 @@ line is not set to use the "beopest_runner" script.
 
 Running
 =======
-The parallel PEST versions are run simply by passing the PEST *.pst file to
-the command, for example: `qpest_cmaes_hp model_opt.pst`.  There are other
+The parallel PEST versions are run simply by passing the PEST \*.pst file to
+the command, for example: ``qpest_cmaes_hp model_opt.pst``.  There are other
 options to control the optimization process, which can be found by running, for
-example, `qpest_cmaes_hp --help`.  Each command has its own options, but they
+example, ``qpest_cmaes_hp --help``.  Each command has its own options, but they
 all share the same options for controlling the parallelization, which are set
-in the `qpest` script.
+in the ``qpest`` script.
 
 Configuration
 =============
@@ -241,18 +241,18 @@ want to run at the same time.  One for the agents and one for the model runs.
     PEST_RUNNERS_QUEUE -> run on compute nodes match number of 'pest_agents'
                           on the node.
 
-The agent jobs in 'PEST_AGENTS_QUEUE' use hardly any resources and just
-manage model runs submitted to the 'PEST_RUNNERS_QUEUE' for the
-'PEST_MANAGER_QUEUE' job.  There has to be the exact same number of
-'PEST_AGENTS_QUEUE' and 'PEST_RUNNERS_QUEUE' slots on each node.  When
-a model is running in 'PEST_RUNNERS_QUEUE' it will use an entire processor.
+The agent jobs in ``PEST_AGENTS_QUEUE`` use hardly any resources and just
+manage model runs submitted to the ``PEST_RUNNERS_QUEUE`` for the
+``PEST_MANAGER_QUEUE`` job.  There has to be the exact same number of
+``PEST_AGENTS_QUEUE`` and ``PEST_RUNNERS_QUEUE`` slots on each node.  When
+a model is running in ``PEST_RUNNERS_QUEUE`` it will use an entire processor.
 These scripts expect to run serial jobs in parallel each with different
 parameters.
 
-Set `PLATFORM` in qpest to either "slurm" or "pbs".
+Set ``PLATFORM`` in qpest to either "slurm" or "pbs".
 
-Set the 'max_agents' to the maximum number of agents per PEST optimization
-run to allow on the cluster.  The `qpest` script may set an optimum value
+Set the ``max_agents`` to the maximum number of agents per PEST optimization
+run to allow on the cluster.  The ``qpest`` script may set an optimum value
 less than this depending on the job.
 
 Example Configuration in `qpest`
