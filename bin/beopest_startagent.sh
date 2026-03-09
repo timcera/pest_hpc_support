@@ -15,8 +15,14 @@ if [[ ! $RUN_PWD ]]; then
 
     mkdir -p "${SL_TMPDIR}"
 
-    # Copy everything to $SL_TMPDIR that the model needs to run.  Exclude PEST
-    # files for example.
+    # Copy everything to $SL_TMPDIR that the model needs to run.  Exclude files
+    # created by the PEST manager for example since they are not needed by the
+    # agent or model and can be large.  Also exclude the beopest_screens
+    # directory since it can be large and is not needed by the agent or model.
+    #
+    # Use ionice to reduce the priority of the copy operation so it doesn't
+    # overload the system since when starting there will be simultaneously many
+    # agents copying files.
     ionice -c3                                     \
         cp                                         \
         --preserve=mode,ownership,timestamps,links \

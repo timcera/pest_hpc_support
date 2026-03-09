@@ -2,8 +2,9 @@ Summary
 =======
 The Parameter ESTimation (PEST), PEST++, and PEST_HP software suites are
 collections of tools for parameter estimation and uncertainty analysis in
-modeling. They provide a framework for calibrating models to observed data,
-assessing model performance, and quantifying uncertainty in model predictions.
+modeling. They provide a framework for optimizing model parameters to find the
+best match between simulation and observed data, assess model performance,
+and quantify uncertainty in model predictions.
 
 These software suites each come with their own way of handling parallelization,
 which can significantly speed up the optimization process. The scripts provided
@@ -13,12 +14,13 @@ PBS.
 
 PEST/PEST++/PEST_HP Parallelization
 ===================================
-The parallelization of the optimization is achieved through a manager-agent
-architecture, where a manager process distributes parameter sets to multiple
-agent processes that run the model in parallel. The results from the agents are
-then collected by the manager for analysis and further optimization.
+Within PEST, PEST_HP, and PEST++ the parallelization of the optimization is
+achieved through a manager-agent architecture, where a manager process
+distributes parameter sets to multiple agent processes where each agent runs
+models serially. The results from the agents are then collected by the manager
+for analysis and further optimization.
 
-First a manager process is started, that waits for agents to connect. Then,
+First a manager process is started that waits for agents to connect. Then,
 multiple agent processes are started, which connect to the manager and wait for
 parameter sets to be distributed. The manager distributes parameter sets to the
 agents, which run the model and return the results to the manager. This process
@@ -28,19 +30,25 @@ communication between the manager and agents can be visualized as follows.
 ::
 
                                 | Iteration 1 | Iteration 2 | ... | Iteration M
-    Manager |<--> Agent 1 |<++> | Model 1     | Model 2     | ... | Model M
-            |<--> Agent 2 |<++> | Model 1     | Model 2     | ... | Model M
-            |<--> Agent 3 |<++> | Model 1     | Model 2     | ... | Model M
+    Manager |<--> Agent 1 |<++> | Model 1     | Model N+1   | ... | Model 2NM+1
+            |<--> Agent 2 |<++> | Model 2     | Model N+2   | ... | Model 2NM+2
+            |<--> Agent 3 |<++> | Model 3     | Model N+3   | ... | Model 2NM+3
              .
              .
              .
-            |<--> Agent N |<++> | Model 1     | Model 2     | ... | Model M
+            |<--> Agent N |<++> | Model N     | Model 2N    | ... | Model 2NM+N
 
     |<--> is the communication between the manager and agents, where the
           manager distributes parameter sets to the agents and waits for the
           agents to complete their assigned model runs and return the results.
     |<++> is the agent creating model input files, running the model, and
           returning the results to the manager.
+    N     is the number of agents running in parallel. The optimum number of
+          agents is (2*(number of parameters being optimized)+1).  Allocating
+          more agents than this will not speed up the optimization.
+    M     is the number of iterations in the optimization process, which is
+          determined by the optimization algorithm and the convergence
+          criteria.
 
 This parallelization approach does not monitor any resources, and the running
 of the manager and agents is external to the parallelization framework. This
@@ -52,86 +60,90 @@ the manager and agents in a parallelized manner using SLURM or PBS.
 Overview of the Scripts
 =======================
 
-+-------------------------+---------+------------------------------------------+
-| Script Name             | Suite   | Description                              |
-+=========================+=========+==========================================+
-| qpest                   | PEST    | [local, gradient Gauss-Marquardt-        |
-|                         |         | Levenberg] This script sets the manager  |
-|                         |         | and agent environment variables for the  |
-|                         |         | parallelization, and starts the manager  |
-|                         |         | with "beopest_startmanager.sh" in the    |
-|                         |         | PEST_MANAGER_QUEUE using 'sbatch'        |
-|                         |         | (SLURM) or 'qsub' (PBS)                  |
-+-------------------------+---------+------------------------------------------+
-| qpest_hp                | PEST_HP | [local, gradient Gauss-Marquardt-        |
-|                         |         | Levenberg]                               |
-+-------------------------+---------+------------------------------------------+
-| qpest_cmaes_hp          | PEST_HP | [global, CMA-ES (covariance matrix       |
-|                         |         | adaptation-evolutionary strategy)] Link  |
-|                         |         | to 'qpest' script.                       |
-+-------------------------+---------+------------------------------------------+
-| qrsi_hp                 | PEST_HP | RSI_HP performs a task similar to that   |
-|                         |         | of PESTPP-IES. Iteratively adjust a set  |
-|                         |         | of random parameter realizations which   |
-|                         |         | are samples of the prior parameter       |
-|                         |         | probability distribution, until they     |
-|                         |         | constitute samples of the posterior      |
-|                         |         | parameter probability distribution.      |
-+-------------------------+---------+------------------------------------------+
-| qpestpp-glm             | PEST++  | local, Gauss-Levenburg-Marquardt         |
-+-------------------------+---------+------------------------------------------+
-| qpestpp-da              | PEST++  | global, differential evolution           |
-+-------------------------+---------+------------------------------------------+
-| qpestpp-mou             | PEST++  | single and multiple constrained          |
-|                         |         | optimization under uncertainty using     |
-|                         |         | evolutionary heuristics                  |
-+-------------------------+---------+------------------------------------------+
-| qpestpp-opt             | PEST++  | decision optimization under uncertainty  |
-|                         |         | using sequential linear programming and  |
-|                         |         | linearised chance constraints            |
-+-------------------------+---------+------------------------------------------+
-| qpestpp-sqp             | PEST++  | ensemble-based, constrained, sequential  |
-|                         |         | quadratic programming                    |
-+-------------------------+---------+------------------------------------------+
-| qpestpp-ies             | PEST++  | iterative ensemble smoother for          |
-|                         | utility | calibration-constrained parameter fields |
-|                         |         | production of a suite of                 |
-+-------------------------+---------+------------------------------------------+
-| qpestpp-sen             | PEST++  | global sensitivity analysis (Morris and  |
-|                         | utility | Saltelli)                                |
-+-------------------------+---------+------------------------------------------+
-| qpestpp-swp             | PEST++  | develops a set of parallelized model     |
-|                         | utility | runs for any reason                      |
-+-------------------------+---------+------------------------------------------+
-| beopest_startmanager.sh |         | Runs the optimum number of agents using  |
-|                         |         | "beopest_startagent.sh" in               |
-|                         |         | PEST_AGENTS_QUEUE using "sbatch" (SLURM) |
-|                         |         | or "qsub" (PBS).                         |
-+-------------------------+---------+------------------------------------------+
-| beopest_startagent.sh   |         | Starts an agent process that connects to |
-|                         |         | the manager. The agent runs the model on |
-|                         |         | the node local to the agent. The model   |
-|                         |         | has to be specified in the *.pst file as |
-|                         |         | "beopest_runner composite_model.sh"      |
-+-------------------------+---------+------------------------------------------+
-| beopest_runner          |         | This is a wrapper script for the         |
-|                         |         | composite model.  It runs the composite  |
-|                         |         | model on the same node as the agent, but |
-|                         |         | scheduled through 'sbatch' (SLURM) or    |
-|                         |         | 'qsub' (PBS) in the PEST_RUNNERS_QUEUE.  |
-+-------------------------+---------+------------------------------------------+
-| serial_job.sh           |         | This is the wrapper script used by the   |
-|                         |         | "beopest_runner" script to run the       |
-|                         |         | composite model.                         |
-+-------------------------+---------+------------------------------------------+
++-------------------------+-------+---------+------------------------------------------+
+| Script Name             | Link  | Suite   | Description                              |
+|                         | to    |         |                                          |
+|                         | qpest |         |                                          |
++=========================+=======+=========+==========================================+
+| qpest                   |       | PEST    | [local, gradient Gauss-Marquardt-        |
+|                         |       |         | Levenberg] This script sets the manager  |
+|                         |       |         | and agent environment variables for the  |
+|                         |       |         | parallelization, and starts the manager  |
+|                         |       |         | with "beopest_startmanager.sh" in the    |
+|                         |       |         | PEST_MANAGER_QUEUE using 'sbatch'        |
+|                         |       |         | (SLURM) or 'qsub' (PBS).  All of the     |
+|                         |       |         | other "q*" file names are linked to this |
+|                         |       |         | single script.                           |
++-------------------------+-------+---------+------------------------------------------+
+| qpest_hp                | X     | PEST_HP | [local, gradient Gauss-Marquardt-        |
+|                         |       |         | Levenberg]                               |
++-------------------------+-------+---------+------------------------------------------+
+| qpest_cmaes_hp          | X     | PEST_HP | [global, CMA-ES (covariance matrix       |
+|                         |       |         | adaptation-evolutionary strategy)] Link  |
+|                         |       |         | to 'qpest' script.                       |
++-------------------------+-------+---------+------------------------------------------+
+| qrsi_hp                 | X     | PEST_HP | RSI_HP performs a task similar to that   |
+|                         |       |         | of PESTPP-IES. Iteratively adjust a set  |
+|                         |       |         | of random parameter realizations which   |
+|                         |       |         | are samples of the prior parameter       |
+|                         |       |         | probability distribution, until they     |
+|                         |       |         | constitute samples of the posterior      |
+|                         |       |         | parameter probability distribution.      |
++-------------------------+-------+---------+------------------------------------------+
+| qpestpp-glm             | X     | PEST++  | local, Gauss-Levenburg-Marquardt         |
++-------------------------+-------+---------+------------------------------------------+
+| qpestpp-da              | X     | PEST++  | global, differential evolution           |
++-------------------------+-------+---------+------------------------------------------+
+| qpestpp-mou             | X     | PEST++  | single and multiple constrained          |
+|                         |       |         | optimization under uncertainty using     |
+|                         |       |         | evolutionary heuristics                  |
++-------------------------+-------+---------+------------------------------------------+
+| qpestpp-opt             | X     | PEST++  | decision optimization under uncertainty  |
+|                         |       |         | using sequential linear programming and  |
+|                         |       |         | linearised chance constraints            |
++-------------------------+-------+---------+------------------------------------------+
+| qpestpp-sqp             | X     | PEST++  | ensemble-based, constrained, sequential  |
+|                         |       |         | quadratic programming                    |
++-------------------------+-------+---------+------------------------------------------+
+| qpestpp-ies             | X     | PEST++  | iterative ensemble smoother for          |
+|                         |       | utility | calibration-constrained parameter fields |
+|                         |       |         | production of a suite of                 |
++-------------------------+-------+---------+------------------------------------------+
+| qpestpp-sen             | X     | PEST++  | global sensitivity analysis (Morris and  |
+|                         |       | utility | Saltelli)                                |
++-------------------------+-------+---------+------------------------------------------+
+| qpestpp-swp             | X     | PEST++  | develops a set of parallelized model     |
+|                         |       | utility | runs for any reason                      |
++-------------------------+-------+---------+------------------------------------------+
+| beopest_startmanager.sh |       |         | Runs the optimum number of agents using  |
+|                         |       |         | "beopest_startagent.sh" in               |
+|                         |       |         | PEST_AGENTS_QUEUE using "sbatch" (SLURM) |
+|                         |       |         | or "qsub" (PBS).                         |
++-------------------------+-------+---------+------------------------------------------+
+| beopest_startagent.sh   |       |         | Starts an agent process that connects to |
+|                         |       |         | the manager. The agent runs the model on |
+|                         |       |         | the node local to the agent. The model   |
+|                         |       |         | has to be specified in the *.pst file as |
+|                         |       |         | "beopest_runner composite_model.sh"      |
++-------------------------+-------+---------+------------------------------------------+
+| beopest_runner          |       |         | This is a wrapper script for the         |
+|                         |       |         | composite model.  It runs the composite  |
+|                         |       |         | model on the same node as the agent, but |
+|                         |       |         | scheduled through 'sbatch' (SLURM) or    |
+|                         |       |         | 'qsub' (PBS) in the PEST_RUNNERS_QUEUE.  |
++-------------------------+-------+---------+------------------------------------------+
+| serial_job.sh           |       |         | This is the wrapper script used by the   |
+|                         |       |         | "beopest_runner" script to run the       |
+|                         |       |         | composite model.                         |
++-------------------------+-------+---------+------------------------------------------+
 
-INSTALLATION
+Installation
 ============
-These scripts expects that PEST plus zero or more of PEST_HP, and PEST++ suites
-of optimizers are installed into a PATH directory.
+These scripts expect that some combination of the PEST, PEST_HP, and PEST++
+suites of optimizers are installed into a PATH directory.
 
 Copy the five scripts in this distribution into a PATH directory and make
-executable using::
+executable using something like the following::
 
     cp qpest \
        beopest_startmanager.sh \
@@ -179,17 +191,44 @@ To support observation re-referencing you must make two links to the
     ln -s beopest_runner r_beopest_runner
     ln -s beopest_runner d_beopest_runner
 
-HELP
+Help
 ====
 Help is available by running a blank command.  You can also use the "--help"
 option for any of the commands.
 
-RUNNING
+Modifying the PEST Control File
+===============================
+The PEST control file (*.pst) needs to be modified to use the new
+parallelization framework.  The model command needs to be changed to use the
+"beopest_runner" script, for example
+
+This::
+
+    ...
+    * model command line
+    composite_model.sh
+    ...
+
+Needs to be changed to this::
+
+    ...
+    * model command line
+    beopest_runner composite_model.sh
+    ...
+
+The "qpest" script will check this and exit with an error if the model command
+line is not set to use the "beopest_runner" script.
+
+Running
 =======
 The parallel PEST versions are run simply by passing the PEST *.pst file to
-the command, for example: 'qpest_cmaes_hp model_opt.pst'
+the command, for example: `qpest_cmaes_hp model_opt.pst`.  There are other
+options to control the optimization process, which can be found by running, for
+example, `qpest_cmaes_hp --help`.  Each command has its own options, but they
+all share the same options for controlling the parallelization, which are set
+in the `qpest` script.
 
-CONFIGURATION
+Configuration
 =============
 This process requires three partitions (on SLURM) or queues (on PBS).  One
 for the manager that should be limited the maximum number of PEST jobs you
@@ -401,5 +440,6 @@ TODO
 - This system of scripts are untested on PBS, but should work with the
   appropriate configuration.  Testing and documentation for PBS is needed.
 - The current system cannot change the number of agents during the
-  optimization.  Would be useful to have the system adapt to the number of PEST
-  optimization runs and the number of agents per run.
+  optimization, similar to how MPI works.  Would be useful to have the system
+  adapt to the number of PEST optimization runs and the number of agents per
+  run to adapt to cluster load.
