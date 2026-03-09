@@ -29,26 +29,27 @@ communication between the manager and agents can be visualized as follows.
 
 ::
 
-                                | Iteration 1 | Iteration 2 | ... | Iteration M
-    Manager |<--> Agent 1 |<++> | Model 1     | Model N+1   | ... | Model 2NM+1
-            |<--> Agent 2 |<++> | Model 2     | Model N+2   | ... | Model 2NM+2
-            |<--> Agent 3 |<++> | Model 3     | Model N+3   | ... | Model 2NM+3
-             .
-             .
-             .
-            |<--> Agent N |<++> | Model N     | Model 2N    | ... | Model 2NM+N
+                       |                    | Iteration 1 | Iteration 2 | ... | Iteration M
+                       |                    |
+    Manager ---    <-> |        Agent 1 <+> | Model 1     | Model N+1   | ... | Model 2NM+1
+            |      <-> |        Agent 2 <+> | Model 2     | Model N+2   | ... | Model 2NM+2
+            |      <-> |        Agent 3 <+> | Model 3     | Model N+3   | ... | Model 2NM+3
+            |      .    
+            |      .    
+            |      .    
+            ---    <-> |        Agent N <+> | Model N     | Model 2N    | ... | Model 2NM+N
 
-    |<--> is the communication between the manager and agents, where the
-          manager distributes parameter sets to the agents and waits for the
-          agents to complete their assigned model runs and return the results.
-    |<++> is the agent creating model input files, running the model, and
-          returning the results to the manager.
-    N     is the number of agents running in parallel. The optimum number of
-          agents is (2*(number of parameters being optimized)+1).  Allocating
-          more agents than this will not speed up the optimization.
-    M     is the number of iterations in the optimization process, which is
-          determined by the optimization algorithm and the convergence
-          criteria.
+    <-> is the network communication between the manager and agents, where the
+        manager distributes parameter sets to the agents and waits for the
+        agents to complete their assigned model runs and return the results.
+    <+> is the agent communication using the file system where the agent
+        creates the model input files, runs the model, and after the model run
+        is complete, extracts the model results to return to the manager.
+    N   is the number of agents running in parallel. The optimum number of
+        agents is (2*(number of parameters being optimized)+1).  Allocating
+        more agents than this will not speed up the optimization.
+    M   is the number of iterations in the optimization process, which is
+        determined by the optimization algorithm and the convergence criteria.
 
 This parallelization approach does not monitor any resources, and the running
 of the manager and agents is external to the parallelization framework. This
@@ -56,6 +57,26 @@ means that the user is responsible for starting the manager and agents, and
 ensuring that they are running correctly. The scripts provided in this
 repository are designed to facilitate this process, by providing a way to start
 the manager and agents in a parallelized manner using SLURM or PBS.
+
+What These Scripts Do
+=====================
+::
+
+    PEST_MANAGER_QUEUE | PEST_AGENTS_QUEUE  | PEST_RUNNERS_QUEUE
+                       |                    |
+                       |                    | Iteration 1 | Iteration 2 | ... | Iteration M
+                       |                    |
+    Manager ---    <-> | NodeXX:Agent 1 <+> | Model 1     | Model N+1   | ... | Model 2NM+1
+            |      <-> | NodeXX:Agent 2 <+> | Model 2     | Model N+2   | ... | Model 2NM+2
+            |      <-> | NodeYY:Agent 3 <+> | Model 3     | Model N+3   | ... | Model 2NM+3
+            |      .            
+            |      .            
+            |      .            
+            ---    <-> | NodeZZ:Agent N <+> | Model N     | Model 2N    | ... | Model 2NM+N
+
+    NodeXX, NodeYY, NodeZZ represent the compute nodes selected by the resource
+    manager to run the agents.  The agent has to run the model on the same node
+    as the agent.
 
 Overview of the Scripts
 =======================
