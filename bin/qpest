@@ -488,7 +488,7 @@ $detailuse
 holdfor=""
 
 # Test given arguments against allowable arguments.
-if ! args=$(getopt ${opts} -- "$@"); then
+if ! args=$(getopt "${opts}" -- "$@"); then
     usage
 fi
 eval set -- "${args}"

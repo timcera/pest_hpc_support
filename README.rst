@@ -385,15 +385,15 @@ Follows is an example `slurm.conf` file::
     # COMPUTE NODES
     NodeName=node[01-08] CPUs=20 Boards=1 SocketsPerBoard=2 CoresPerSocket=10 ThreadsPerCore=1 RealMemory=512000 State=UNKNOWN
     NodeName=head        CPUs=20 Boards=1 SocketsPerBoard=2 CoresPerSocket=10 ThreadsPerCore=1 RealMemory=184320 State=UNKNOWN
-    
+
     PartitionName=allhosts     Default=True  ExclusiveUser=False DisableRootJobs=False RootOnly=False Hidden=False ReqResv=False State=UP OverSubscribe=YES SelectTypeParameters=CR_Core Nodes=node[01-08] MaxTime=INFINITE
-    
+
     PartitionName=pest.master  Default=False ExclusiveUser=False DisableRootJobs=False RootOnly=False Hidden=False ReqResv=False State=UP OverSubscribe=YES SelectTypeParameters=CR_Core Nodes=head
-    
+
     PartitionName=pest.agents  Default=False ExclusiveUser=False DisableRootJobs=False RootOnly=False Hidden=False ReqResv=False State=UP OverSubscribe=YES SelectTypeParameters=CR_Core Nodes=node[01-08] LLN=True
-    
+
     PartitionName=pest.runners Default=False ExclusiveUser=False DisableRootJobs=False RootOnly=False Hidden=False ReqResv=False State=UP OverSubscribe=YES SelectTypeParameters=CR_Core Nodes=node[01-08]
-    
+
     PartitionName=prunners     Default=False ExclusiveUser=False DisableRootJobs=False RootOnly=False Hidden=False ReqResv=False State=UP OverSubscribe=YES SelectTypeParameters=CR_Core Nodes=head DefMemPerCPU=25600
 
 TODO

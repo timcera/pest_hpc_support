@@ -16,7 +16,7 @@ chmod a+x "${COPY_FAILED_AGENT}"
 
 cleanup() {
     if [[ ${DELETE_TMP_PST} ]]; then
-        rm "$(basename ${DELETE_TMP_PST} .pst)".*
+        rm "$(basename "${DELETE_TMP_PST}" .pst)".*
     fi
 
     rm -f "${QPEST_RUNNING}"
@@ -47,9 +47,9 @@ BEOPEST_MANAGERJOBID=${BEOPEST_MANAGERJOBID:-${PBS_JOBID}}
 # run pest
 echo "${MANAGERFNAME} ${BEOPEST_PESTFILE} ${PEST_OPTIONS} ${MANAGERFLAG}${BEOPEST_PORT}"
 if [ -z "${INAME}" ]; then
-    ${MANAGERFNAME} ${BEOPEST_PESTFILE_LOCAL} ${PEST_OPTIONS} ${MANAGERFLAG}${BEOPEST_PORT} &
+    ${MANAGERFNAME} "${BEOPEST_PESTFILE_LOCAL}" ${PEST_OPTIONS:+ $PEST_OPTIONS} "${MANAGERFLAG}${BEOPEST_PORT}" &
 else
-    ${MANAGERFNAME} ${BEOPEST_PESTFILE_LOCAL} ${PEST_OPTIONS} ${MANAGERFLAG}${BEOPEST_PORT} < ${INAME} &
+    ${MANAGERFNAME} "${BEOPEST_PESTFILE_LOCAL}" ${PEST_OPTIONS:+ $PEST_OPTIONS} "${MANAGERFLAG}${BEOPEST_PORT}" < "${INAME}" &
 fi
 
 # sleep a little to make sure the manager is started before starting the agents
@@ -97,4 +97,4 @@ if [ -f qpest_cleanup.sh ]; then
     sh qpest_cleanup.sh
 fi
 
-scancel ${arr}
+scancel ${arr:+ $arr}

@@ -11,16 +11,16 @@ OUTFILENAME=slurm_stdout.${SLURM_JOB_NAME}.${SLURM_JOB_ID}.txt
 
 mtype=$(file --mime-type -b "$1")
 case ${mtype} in
-    text/x-shellscript) bash $@ ;;
-    text/x-python) python $@ ;;
-    application/x-executable) $@ ;;
+    text/x-shellscript) bash "$@" ;;
+    text/x-python) python "$@" ;;
+    application/x-executable) "$@" ;;
     text/plain)
         case $1 in
-            *.py) python $@ ;;
-            *.sh) bash $@ ;;
-            *) $@ ;;
+            *.py) python "$@" ;;
+            *.sh) bash "$@" ;;
+            *) "$@" ;;
         esac ;;
-    *) $@ ;;
+    *) "$@" ;;
 esac
 
 if [ ! -s "${ERRORNAME}" ]; then
